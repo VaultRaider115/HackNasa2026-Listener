@@ -1,0 +1,6 @@
+/target
+/.tools
+.env
+api.env
+.env.*
+!.env.example
