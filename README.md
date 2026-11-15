@@ -21,6 +21,8 @@ lo envía a un **proveedor de IA compatible con OpenAI** y guarda la respuesta e
 - Si un endpoint falla, los demás continúan procesándose.
 - Cada 15–60 minutos aleatorios, elige un evento sin mensaje IA, lo envía al
   proveedor de IA y guarda `mensaje` y `explicacion` en `mensajes_ia`.
+- Si `JUEGO_ENABLED=true`, envía el `mensaje` a la pantalla de **Mission
+  Trainer** por el relay WebSocket, sin pasar por el MCP de Python.
 
 ## Estructura del proyecto
 
@@ -37,11 +39,14 @@ src/
 │   ├── nasa/                # Feature de escucha DONKI.
 │   │   ├── client.rs        # Llamadas a NASA con reintentos.
 │   │   └── mapping.rs       # Mapeo DONKI → eventos.
-│   └── ia/                  # Feature de mensajes IA.
-│       ├── config.rs        # AiConfig y validación.
-│       ├── client.rs        # Llamada al proveedor de IA.
-│       ├── prompt.rs        # Prompt por defecto y mensajes.
-│       └── response.rs      # Parseo de la respuesta JSON.
+│   ├── ia/                  # Feature de mensajes IA.
+│   │   ├── config.rs        # AiConfig y validación.
+│   │   ├── client.rs        # Llamada al proveedor de IA.
+│   │   ├── prompt.rs        # Prompt por defecto y mensajes.
+│   │   └── response.rs      # Parseo de la respuesta JSON.
+│   └── juego/               # Cliente WebSocket para Mission Trainer.
+│       ├── config.rs        # JuegoConfig y validación de sala.
+│       └── client.rs        # Conexión al relay, reintentos y envío de mensajes.
 ├── infrastructure/
 │   └── postgres/            # Repositorios SQLx.
 │       ├── eventos.rs       # Insert de eventos.
@@ -168,9 +173,10 @@ cargo build --release
 | Opción | Descripción |
 | --- | --- |
 | `--once` | Ejecuta un solo ciclo de NASA y termina. |
-| `--dry-run` | No escribe en la base de datos; con `--ai-once` muestra la respuesta IA. |
+| `--dry-run` | No escribe en base de datos ni envía al relay; muestra la respuesta IA o el mensaje a enviar. |
 | `--ai-once` | Elige un evento pendiente, lo envía al proveedor de IA una vez y termina. |
 | `--ai-only` | Ejecuta solo el worker de IA, sin consultar NASA. |
+| `--juego-test "texto"` | Envía un mensaje de prueba al juego y termina. No necesita `DATABASE_URL` ni `JUEGO_ENABLED`. Con `JUEGO_SALA` va a esa sala; sin ella, por el MCP global a todas las salas. |
 | `-h`, `--help` | Muestra la ayuda. |
 
 ### Variables de entorno
@@ -195,6 +201,11 @@ cargo build --release
 | `AI_TEMPERATURE` | `0.8` | Creatividad del modelo (0 a 2). |
 | `AI_TIMEOUT_SEGUNDOS` | `120` | Timeout de la llamada al proveedor de IA. |
 | `AI_PENDING_LIMIT` | `500` | Eventos pendientes recientes entre los que se elige al azar. |
+| `JUEGO_ENABLED` | `false` | Activa el envío de alertas de IA a la pantalla de Mission Trainer. |
+| `JUEGO_RELAY_URL` | `wss://mission-trainer-relay.onrender.com` | URL del relay WebSocket. |
+| `JUEGO_SALA` | — | Código de sala (3–40 caracteres: letras, números, `-`, `_`). Si se define, el mensaje va solo a esa sala. Si se omite, se usa el MCP global (`/mcp` sin sala) y el relay reenvía el mensaje a todas las salas. |
+| `JUEGO_COLOR` | `#ffcc00` | Color hex del mensaje en pantalla. |
+| `JUEGO_SEGUNDOS` | `8` | Duración en segundos del mensaje en pantalla. |
 
 ## Worker de IA
 
@@ -285,3 +296,137 @@ consultas.
 
 Si lo que quieres es que el listener se ejecute cada **2 días** (en vez de cada
 hora), configura `INTERVALO_MINUTOS=2880`.
+
+## Integración con Mission Trainer
+
+El listener puede enviar las alertas de la IA directamente a la pantalla del juego
+**Mission Trainer** conectándose a su servidor relay WebSocket.
+
+- **Juego web**: https://xicotencatl22.github.io/Hacknasa2026-Mission-Trainer-Web/?sala=CODIGO
+- **Relay WebSocket**: `wss://mission-trainer-relay.onrender.com`
+
+### Configuración del juego
+
+En tu archivo `.env`:
+
+```env
+JUEGO_ENABLED=true
+JUEGO_RELAY_URL=wss://mission-trainer-relay.onrender.com
+# Con sala: solo esa sala. Sin JUEGO_SALA: MCP global, todas las salas.
+JUEGO_SALA=mi-sala-de-prueba
+JUEGO_COLOR=#ffcc00
+JUEGO_SEGUNDOS=8
+```
+
+`JUEGO_SALA` es opcional. El código de sala funciona como contraseña: quien lo
+conozca puede controlar el juego. No se imprime en los logs normales. Si no
+defines `JUEGO_SALA`, el listener conecta al **MCP global** (`/mcp` sin sala) y el
+relay reenvía el mensaje a **todas las salas**; abre el juego con el `?sala=CODIGO`
+correspondiente para que reciba el mensaje.
+
+### Probar el envío
+
+1. Abre el juego en el navegador con la misma sala:
+   `https://xicotencatl22.github.io/Hacknasa2026-Mission-Trainer-Web/?sala=mi-sala-de-prueba`
+2. Envía un mensaje de prueba:
+
+   ```bash
+   cargo run -- --juego-test "¡Alerta solar! Radiación entrante."
+   ```
+
+   `--juego-test` no necesita `DATABASE_URL` ni `JUEGO_ENABLED`; usa
+   `JUEGO_SALA` (si está definida), `JUEGO_COLOR` y `JUEGO_SEGUNDOS`. Sin
+   `JUEGO_SALA`, el mensaje va por el MCP global a todas las salas.
+
+3. Para probar la construcción sin conectar al relay:
+
+   ```bash
+   cargo run -- --juego-test "Prueba simulada" --dry-run
+   ```
+
+### Protocolo del relay
+
+El relay empareja al juego (`/juego?sala=CODIGO`) con uno o varios clientes
+MCP: `/mcp?sala=CODIGO` (el mensaje llega solo a esa sala) o `/mcp` sin sala
+(MCP global: el relay reenvía el mensaje a **todas** las salas; es el modo que
+usa el listener cuando `JUEGO_SALA` no está definida). El listener entra como
+cliente MCP y:
+
+- Recibe al conectar `{"tipo":"sistema","juego_conectado":true|false}`.
+- Envía `{"id":1,"cmd":"mensaje","args":{"texto":"...","color":"#ffcc00","segundos":8}}`.
+- Recibe `{"id":1,"ok":true,"datos":{},"error":"","mensaje":"mostrado"}`.
+- Si no hay juego en la sala, el relay responde `{"id":1,"ok":false,"error":"..."}`.
+
+El juego solo muestra `texto`; no tiene campo para `explicacion`, así que esa
+parte se guarda en Postgres pero no se envía. El mensaje se trunca a 160
+caracteres antes de enviarlo.
+
+El cliente maneja reconexiones con backoff exponencial para absorber el tiempo de
+arranque en frío de Render (hasta 1 minuto). Si el relay o la conexión fallan, el
+error se registra en consola y nunca interrumpe el guardado en base de datos ni
+tumba el proceso.
+
+## Servidor MCP (Claude <-> Juego)
+
+`mcp/servidor_mcp.py` es el servidor MCP que expone las herramientas de
+**Mission Trainer** al cliente MCP (Claude Desktop, Claude Code, otro). Es el
+puente inverso al listener: mientras el listener habla con el relay con el rol
+`mcp` para las alertas de la IA, este servidor se conecta al relay para que
+Claude lance eventos, recargue sistemas y ponga mensajes en pantalla.
+
+- **Instalación**: `pip install "mcp[cli]" websockets`.
+- **Conexión**: el servidor se conecta a `wss://<relay>/mcp?sala=CODIGO` con
+  backoff exponencial (cold starts de Render).
+- **Claude Desktop**: `mcpServers -> mission-trainer` con stdio sobre
+  `mcp/servidor_mcp.py`.
+
+### Herramientas
+
+| Herramienta | Descripción |
+| --- | --- |
+| `mostrar_mensaje(texto, color, segundos)` | Muestra un mensaje en la pantalla del juego. |
+| `obtener_estado()` | Estado de la conexión MCP con el juego. |
+| `recargar_oxigeno(porcentaje)` | Recarga el oxígeno del jugador (1-100). |
+| `recargar_combustible(porcentaje)` | Recarga el combustible del jugador (1-100). |
+| `leer_eventos()` | Lista los eventos de la NASA pendientes (sin mensaje IA). |
+| `lanzar_evento_nasa(tipo, intensidad, fecha, mensaje, dificultad, severidad)` | Lanza un evento de la NASA (`CME`, `GST`, `SEP`, `FLR`, `IPS`). |
+| `cancelar_evento_nasa()` | Cancela el evento activo en el juego. |
+| `conectar_sala(codigo)` | Conecta el MCP a la sala de un juego abierto en otro dispositivo. |
+| `estado_conexion()` | Devuelve si el MCP está conectado y si hay juego en la sala. |
+
+### Configuración del servidor MCP
+
+Variables de entorno del servidor (`mcp/servidor_mcp.py`):
+
+```env
+MISSION_RELAY=wss://mission-trainer-relay.onrender.com
+MISSION_SALA=mi-sala-1
+SUPABASE_URL=https://<proyecto>.supabase.co
+SUPABASE_KEY=tu_service_key
+```
+
+- `MISSION_RELAY` overridea la URL del relay (p. ej. `wss://tu-servicio.onrender.com`).
+- `MISSION_SALA` conecta a esa sala al arrancar (opcional; si no se define, Claude
+  usa `conectar_sala`).
+- `SUPABASE_URL` / `SUPABASE_KEY` se usan solo para `leer_eventos`.
+
+Desde Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "mission-trainer": {
+      "command": "python",
+      "args": ["...\\...\\Hacknasa2026-Mission-Trainer\\mcp\\servidor_mcp.py"],
+      "env": {
+        "MISSION_RELAY": "wss://mission-trainer-relay.onrender.com",
+        "MISSION_SALA": "nasa123"
+      }
+    }
+  }
+}
+```
+
+El plan gratuito de Render se duerme tras 15 minutos sin uso; la primera conexión
+después de eso puede tardar hasta un minuto en conectarse.
+

@@ -13,14 +13,16 @@ use serde_json::json;
 use sqlx::PgPool;
 use tokio::time::sleep;
 
+use crate::features::juego::{self, JuegoClient};
 use crate::infrastructure::postgres;
-use crate::shared::text::now_iso;
+use crate::shared::text::{now_iso, truncate};
 
 pub async fn run_loop(
     client: &reqwest::Client,
     config: &AiConfig,
     pool: &PgPool,
     dry_run: bool,
+    juego_client: Option<&JuegoClient>,
 ) -> Result<()> {
     config.ensure_ready()?;
 
@@ -41,7 +43,7 @@ pub async fn run_loop(
             }
         }
 
-        match dispatch_once(client, config, pool, dry_run).await {
+        match dispatch_once(client, config, pool, dry_run, juego_client).await {
             Ok(true) => {}
             Ok(false) => {
                 eprintln!(
@@ -63,6 +65,7 @@ pub async fn dispatch_once(
     config: &AiConfig,
     pool: &PgPool,
     dry_run: bool,
+    juego_client: Option<&JuegoClient>,
 ) -> Result<bool> {
     let api_key = config.api_key()?;
 
@@ -115,6 +118,22 @@ pub async fn dispatch_once(
             "[{}] IA: resultado mostrado en dry-run, no se guardó.",
             now_iso()
         );
+
+        if let Some(juego) = juego_client {
+            let texto_pantalla = truncate(&contenido.mensaje, juego::MAX_MENSAJE_CHARS);
+            let msg_pantalla = juego::construir_mensaje_pantalla(
+                1,
+                &texto_pantalla,
+                &juego.config.color,
+                juego.config.segundos,
+            );
+            println!("{}", serde_json::to_string_pretty(&msg_pantalla)?);
+            eprintln!(
+                "[{}] Juego: modo dry-run, mensaje de prueba no enviado al relay.",
+                now_iso()
+            );
+        }
+
         return Ok(true);
     }
 
@@ -132,6 +151,20 @@ pub async fn dispatch_once(
             event.id,
             event.tipo
         );
+    }
+
+    // Enviar alerta al juego sin tumbar el proceso ni alterar el guardado en base
+    if let Some(juego) = juego_client {
+        let texto_pantalla = truncate(&contenido.mensaje, juego::MAX_MENSAJE_CHARS);
+        if let Err(error) = juego
+            .enviar_mensaje(&texto_pantalla, &juego.config.color, juego.config.segundos)
+            .await
+        {
+            eprintln!(
+                "[{}] Juego: no se pudo enviar el mensaje a la pantalla: {error:#}",
+                now_iso()
+            );
+        }
     }
 
     Ok(true)

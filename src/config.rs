@@ -16,13 +16,13 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn from_env(cli_dry_run: bool) -> Result<Self> {
+    pub fn from_env(cli_dry_run: bool, db_optional: bool) -> Result<Self> {
         let nasa_api_key = first_non_empty(&["API_NASA_KEY", "NASA_API_KEY"]);
 
         let dry_run = cli_dry_run || env_bool_or("DRY_RUN", false);
         let database_url = first_non_empty(&["DATABASE_URL"]);
 
-        if !dry_run && database_url.is_none() {
+        if !dry_run && !db_optional && database_url.is_none() {
             bail!(
                 "Falta DATABASE_URL. Añádela a .env con la cadena de conexión Postgres de Supabase."
             );
