@@ -5,6 +5,7 @@ use crate::shared::env::{env_bool_or, env_parse, first_non_empty};
 pub const JUEGO_RELAY_URL_DEFAULT: &str = "wss://mission-trainer-relay.onrender.com";
 pub const JUEGO_COLOR_DEFAULT: &str = "#ffcc00";
 pub const JUEGO_SEGUNDOS_DEFAULT: u32 = 8;
+pub const JUEGO_DIFICULTAD_DEFAULT: &str = "Normal";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JuegoConfig {
@@ -13,6 +14,11 @@ pub struct JuegoConfig {
     pub sala: Option<String>,
     pub color: String,
     pub segundos: u32,
+    /// Clave de /difusion del relay (DIFUSION_CLAVE en Render). Se usa cuando no hay
+    /// JUEGO_SALA: el evento llega a todos los juegos de todas las salas.
+    pub clave_difusion: Option<String>,
+    /// Dificultad con la que el juego ejecuta el evento: Fácil, Normal, Difícil o Extremo.
+    pub dificultad: String,
 }
 
 impl JuegoConfig {
@@ -22,11 +28,20 @@ impl JuegoConfig {
             .unwrap_or_else(|| JUEGO_RELAY_URL_DEFAULT.to_string());
         validar_relay_url(&relay_url)?;
 
-        // Sin JUEGO_SALA se usa el MCP global en /mcp: el relay reenvía a todas las salas.
+        // Con JUEGO_SALA: solo esa sala (/mcp?sala=...).
+        // Sin JUEGO_SALA: difusión a todas las salas (/difusion?clave=DIFUSION_CLAVE).
         let sala = first_non_empty(&["JUEGO_SALA"]);
         if let Some(s) = sala.as_deref() {
             validar_sala(s)?;
         }
+        let clave_difusion = first_non_empty(&["DIFUSION_CLAVE"]);
+        if enabled && sala.is_none() && clave_difusion.is_none() {
+            bail!(
+                "JUEGO_ENABLED=true necesita JUEGO_SALA (una sala) o DIFUSION_CLAVE (todas las salas)"
+            );
+        }
+        let dificultad = first_non_empty(&["JUEGO_DIFICULTAD"])
+            .unwrap_or_else(|| JUEGO_DIFICULTAD_DEFAULT.to_string());
 
         let color =
             first_non_empty(&["JUEGO_COLOR"]).unwrap_or_else(|| JUEGO_COLOR_DEFAULT.to_string());
@@ -42,6 +57,8 @@ impl JuegoConfig {
             sala,
             color,
             segundos,
+            clave_difusion,
+            dificultad,
         })
     }
 

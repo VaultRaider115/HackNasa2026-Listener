@@ -121,11 +121,11 @@ pub async fn dispatch_once(
 
         if let Some(juego) = juego_client {
             let texto_pantalla = truncate(&contenido.mensaje, juego::MAX_MENSAJE_CHARS);
-            let msg_pantalla = juego::construir_mensaje_pantalla(
+            let msg_pantalla = juego::construir_evento_nasa(
                 1,
+                &event,
                 &texto_pantalla,
-                &juego.config.color,
-                juego.config.segundos,
+                &juego.config.dificultad,
             );
             println!("{}", serde_json::to_string_pretty(&msg_pantalla)?);
             eprintln!(
@@ -156,12 +156,10 @@ pub async fn dispatch_once(
     // Enviar alerta al juego sin tumbar el proceso ni alterar el guardado en base
     if let Some(juego) = juego_client {
         let texto_pantalla = truncate(&contenido.mensaje, juego::MAX_MENSAJE_CHARS);
-        if let Err(error) = juego
-            .enviar_mensaje(&texto_pantalla, &juego.config.color, juego.config.segundos)
-            .await
+        if let Err(error) = juego.enviar_evento(&event, &texto_pantalla).await
         {
             eprintln!(
-                "[{}] Juego: no se pudo enviar el mensaje a la pantalla: {error:#}",
+                "[{}] Juego: no se pudo enviar el evento al juego: {error:#}",
                 now_iso()
             );
         }

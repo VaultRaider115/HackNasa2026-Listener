@@ -299,46 +299,50 @@ hora), configura `INTERVALO_MINUTOS=2880`.
 
 ## Integración con Mission Trainer
 
-El listener puede enviar las alertas de la IA directamente a la pantalla del juego
-**Mission Trainer** conectándose a su servidor relay WebSocket.
+Cuando la IA genera el mensaje de un evento, el listener manda **el evento real** al
+juego **Mission Trainer** por su relay WebSocket. El juego ejecuta la mecánica de ese
+tipo de evento (radiación, reparaciones, fallas eléctricas...) y muestra el mensaje.
+El resultado de cada jugador se guarda en `resultados_eventos` (ranking de la página).
 
 - **Juego web**: https://xicotencatl22.github.io/Hacknasa2026-Mission-Trainer-Web/?sala=CODIGO
 - **Relay WebSocket**: `wss://mission-trainer-relay.onrender.com`
 
 ### Configuración del juego
 
-En tu archivo `.env`:
+En tu archivo `.env` (nunca en `.env.example`):
 
 ```env
 JUEGO_ENABLED=true
 JUEGO_RELAY_URL=wss://mission-trainer-relay.onrender.com
-# Con sala: solo esa sala. Sin JUEGO_SALA: MCP global, todas las salas.
-JUEGO_SALA=mi-sala-de-prueba
-JUEGO_COLOR=#ffcc00
-JUEGO_SEGUNDOS=8
+
+# Opción A, todas las salas: la clave de difusión del relay
+# (Render -> mission-trainer-relay -> Environment -> DIFUSION_CLAVE).
+DIFUSION_CLAVE=la_clave_del_relay
+
+# Opción B, una sola sala (si se define, tiene prioridad sobre la difusión).
+# JUEGO_SALA=mi-sala-de-prueba
+
+JUEGO_DIFICULTAD=Normal   # Fácil, Normal, Difícil o Extremo
+JUEGO_COLOR=#ffcc00       # solo para --juego-test
+JUEGO_SEGUNDOS=8          # solo para --juego-test
 ```
 
-`JUEGO_SALA` es opcional. El código de sala funciona como contraseña: quien lo
-conozca puede controlar el juego. No se imprime en los logs normales. Si no
-defines `JUEGO_SALA`, el listener conecta al **MCP global** (`/mcp` sin sala) y el
-relay reenvía el mensaje a **todas las salas**; abre el juego con el `?sala=CODIGO`
-correspondiente para que reciba el mensaje.
+La sala y la clave funcionan como contraseñas: no se imprimen en los logs.
 
 ### Probar el envío
 
-1. Abre el juego en el navegador con la misma sala:
+1. Abre el juego con alguna sala:
    `https://xicotencatl22.github.io/Hacknasa2026-Mission-Trainer-Web/?sala=mi-sala-de-prueba`
-2. Envía un mensaje de prueba:
+2. Envía un texto de prueba:
 
    ```bash
    cargo run -- --juego-test "¡Alerta solar! Radiación entrante."
    ```
 
-   `--juego-test` no necesita `DATABASE_URL` ni `JUEGO_ENABLED`; usa
-   `JUEGO_SALA` (si está definida), `JUEGO_COLOR` y `JUEGO_SEGUNDOS`. Sin
-   `JUEGO_SALA`, el mensaje va por el MCP global a todas las salas.
+   `--juego-test` no necesita `DATABASE_URL` ni `JUEGO_ENABLED`. Con `JUEGO_SALA`
+   llega a esa sala; sin ella, por difusión a todas (necesita `DIFUSION_CLAVE`).
 
-3. Para probar la construcción sin conectar al relay:
+3. Para ver el mensaje sin conectar al relay:
 
    ```bash
    cargo run -- --juego-test "Prueba simulada" --dry-run
@@ -346,25 +350,26 @@ correspondiente para que reciba el mensaje.
 
 ### Protocolo del relay
 
-El relay empareja al juego (`/juego?sala=CODIGO`) con uno o varios clientes
-MCP: `/mcp?sala=CODIGO` (el mensaje llega solo a esa sala) o `/mcp` sin sala
-(MCP global: el relay reenvía el mensaje a **todas** las salas; es el modo que
-usa el listener cuando `JUEGO_SALA` no está definida). El listener entra como
-cliente MCP y:
+El relay tiene dos entradas para el listener:
 
-- Recibe al conectar `{"tipo":"sistema","juego_conectado":true|false}`.
-- Envía `{"id":1,"cmd":"mensaje","args":{"texto":"...","color":"#ffcc00","segundos":8}}`.
-- Recibe `{"id":1,"ok":true,"datos":{},"error":"","mensaje":"mostrado"}`.
-- Si no hay juego en la sala, el relay responde `{"id":1,"ok":false,"error":"..."}`.
+- `/mcp?sala=CODIGO`: una sala. Al conectar recibe
+  `{"tipo":"sistema","juego_conectado":true|false}`; cada comando se contesta con
+  `{"id":1,"ok":true,"datos":{...}}` o `{"id":1,"ok":false,"error":"..."}`.
+- `/difusion?clave=CLAVE`: todos los juegos de todas las salas. El relay contesta
+  `{"tipo":"difusion","juegos":N}`. Con una clave incorrecta cierra la conexión.
+  **No existe `/mcp` sin sala.**
 
-El juego solo muestra `texto`; no tiene campo para `explicacion`, así que esa
-parte se guarda en Postgres pero no se envía. El mensaje se trunca a 160
-caracteres antes de enviarlo.
+Comandos que manda el listener:
 
-El cliente maneja reconexiones con backoff exponencial para absorber el tiempo de
-arranque en frío de Render (hasta 1 minuto). Si el relay o la conexión fallan, el
-error se registra en consola y nunca interrumpe el guardado en base de datos ni
-tumba el proceso.
+- `{"id":1,"cmd":"evento_nasa","args":{"tipo":"FLR","intensidad":"C2.8","fecha":"2026-11-14T21:16:00Z","mensaje":"...","dificultad":"Normal","evento_id":37}}`
+  (al generar un mensaje de IA).
+- `{"id":1,"cmd":"mensaje","args":{"texto":"...","color":"#ffcc00","segundos":8}}`
+  (`--juego-test`).
+
+El mensaje se recorta a 160 caracteres; la `explicacion` se guarda en Postgres pero
+no se envía. El cliente reintenta con backoff para absorber el arranque en frío de
+Render (hasta 1 minuto). Si el relay falla, solo se avisa en consola: nunca
+interrumpe el guardado en la base ni tumba el proceso.
 
 ## Servidor MCP (Claude <-> Juego)
 

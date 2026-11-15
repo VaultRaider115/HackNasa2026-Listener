@@ -91,7 +91,9 @@ pub fn print_help() {
            AI_PROMPT                      Prompt personalizado (opcional).\n\
            JUEGO_ENABLED                  true/false para habilitar envío al juego.\n\
            JUEGO_RELAY_URL                URL del relay WebSocket (wss://...).\n\
-           JUEGO_SALA                     Código de sala (3-40). Sin definir: MCP global (todas las salas)\n\
+           JUEGO_SALA                     Código de sala (3-40). Sin definir: difusión a todas las salas.\n\
+           DIFUSION_CLAVE                 Clave de /difusion del relay (necesaria sin JUEGO_SALA).\n\
+           JUEGO_DIFICULTAD               Fácil, Normal, Difícil o Extremo (por defecto Normal).\n\
            JUEGO_COLOR                    Color hex del mensaje en pantalla (ej. #ffcc00).\n\
            JUEGO_SEGUNDOS                 Duración en segundos del mensaje en pantalla.\n"
     );
@@ -135,7 +137,7 @@ pub fn print_banner(
                 juego_config.relay_url
             ),
             None => eprintln!(
-                "  Juego: activado (MCP global, todas las salas; relay: {})",
+                "  Juego: activado (difusión a todas las salas; relay: {})",
                 juego_config.relay_url
             ),
         }
